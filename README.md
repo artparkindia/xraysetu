@@ -5,11 +5,10 @@ While institutionally sourced images are mostly santized and well cropped as the
 Crowd sourced images, thus, need a filtering process before they can be sent to the inference network. In this work we have come up with a multi stage filtering framework for preprocessing crowd sourced chest X-ray images before they are sent to the inference network
 
 Multi stage filtering involves 3 tasks
-1. Identify if the image is Xray or not*
+1. Identify if the image is Xray or not
 2. If the image is an Xray, classify it as good/bad image/uncertain
 3. If the Xray is a good image, crop the region of interest, i.e the lung region 
-4. You can pass the cropped image to the inference network of your choice \
-<small>*stage 1 code will be updated shortly, please use only Chest Xray images for running the scripts detailed below</small>
+4. You can pass the cropped image to the inference network of your choice 
 
 We trained five different CNN models(Resnet, VGG, Xception, Inception and Mobilenet) for the Stage 2 & 3 and pooled their result by voice vote and Non-Max supression to get the image class and the image bounding box if the image is good. \
 Below we describe how to get the results on your dataset.

@@ -2,7 +2,7 @@ import streamlit as st
 import streamlit_cropper as st_cropper
 import cv2
 import matplotlib.pyplot as plt
-#import rekognition_inference
+import simclr_xray_type_check
 import multinet_result
 import unet_segmentation
 import numpy as np
@@ -14,26 +14,10 @@ import sys
 import tensorflow as tf
 import shutil
 import argparse
+
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 from tensorflow.keras.models import load_model
 from PIL import Image
-
-saved_model_name = [ "xception", "resnet","vgg", "inception", "mobilenet"]
-test_image_set_path = '../test_images'
-result_cropped = 'cropped_image'
-trained_models_path = '../trained_models'
-
-parser = argparse.ArgumentParser()
-parser.add_argument('-i', '--input-image-folder',
-                    required=False,
-                    type=str,
-                    default=test_image_set_path,
-                    dest="image_path",
-                    metavar="image_path",
-                    help="Specify the image folder path")
-
-args = parser.parse_args()
-image_path = args.image_path
 
 voice_vote_interpretation={
     0:'Bad',
@@ -41,23 +25,38 @@ voice_vote_interpretation={
     2:'Uncertain'
 }
 
+saved_model_name = ["resnet", "vgg", "inception", "xception", "mobilenet"]
+result_cropped = 'cropped_image'
+trained_models_path = '../trained_models'
+test_image_path = '../test_images'
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-i', '--input-image-folder',
+                    required=False,
+                    type=str,
+                    dest="image_path",
+                    default=test_image_path,
+                    metavar="image_path",
+                    help="Specify the image folder path")
+
+args = parser.parse_args()
+image_path = args.image_path
+
 result_path = {
     0:'result/bad/',
     1:'result/good/',
     2:'result/uncertain/'
 }
-
-
 cropped_path = 'result/cropped_image/'
 #Limit GPU usage
 gpus = tf.config.experimental.list_physical_devices('GPU')
 print(gpus)
-# if gpus:
-#    try:
-#        tf.config.experimental.set_virtual_device_configuration(gpus[0], 
-#                    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024*4)])
-#     except RuntimeError as e:
-#        print(e)
+if gpus:
+    try:
+        tf.config.experimental.set_virtual_device_configuration(gpus[0], 
+                    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024*4)])
+    except RuntimeError as e:
+        print(e)
         
 @st.cache(suppress_st_warning=True, allow_output_mutation=True)
 def load_trained_model():
@@ -81,17 +80,17 @@ def box_algorithm(coord, w, h):
         return bbox_dict
     return get_bbox_coord
 
-# @st.cache
-# def xray_or_not(input_img):
-#     with st.spinner("Checking if the Image is an Xray"):
-#         res = rekognition_inference.check_xray_or_not(input_image)
-#         return res
+@st.cache
+def xray_or_not(input_image):
+    with st.spinner("Checking if the Image is a Chest X-Ray"):
+        res = simclr_xray_type_check.xray_or_not(input_image)
+        return res
 
 def get_voice_vote(input_image):
     all_preds_class = np.empty((1, len(saved_model_name)))
     all_preds_bbox = np.empty((1, len(saved_model_name), 4))
     for idx, model_name in enumerate(saved_model_name):
-        img = cv2.imdecode(np.frombuffer(input_image, np.uint8), cv2.IMREAD_COLOR)
+        img = input_image 
         if model_name=='mobilenet':resize=(224, 224)
         else:resize=(256, 256)
         img = cv2.resize(img,resize)
@@ -124,7 +123,7 @@ if selected_folder:
         upload_image = False
         selected_image_path = os.path.join(image_path, selected_folder, image_name)
         input_image = cv2.imread(selected_image_path)
-        file_selected = cv2.imencode('.jpeg', input_image)[1].tobytes()
+        file_selected = input_image 
 
 realtime_update = st.sidebar.checkbox(label="Update in Real Time", value=True)
 
@@ -132,7 +131,7 @@ is_xray = None
 voice_vote = None
 new_image = False
 
-if file_selected:
+if (not upload_image and file_selected.any()) or (file_selected):
     curr_img_name = file_selected.name if upload_image else image_name
     new_image = ('prev_image' not in st.session_state) or (st.session_state['prev_image']!=curr_img_name)
     if new_image:
@@ -140,46 +139,55 @@ if file_selected:
             del st.session_state['class']
             del st.session_state['bbox']
         except Exception as e:
-            st.warning('class and bounding box not set')
+            print('class and bounding box not set')
                        
     st.write('Input image', curr_img_name)
     st.image(file_selected, width=256)
-    input_image = file_selected.getvalue() if upload_image else file_selected
-    is_xray = True #xray_or_not(input_image)
-#     'Image is an Xray:', is_xray
+    input_image = np.array(Image.open(file_selected)) if upload_image else file_selected
+    is_xray = xray_or_not(input_image)
+    'Image is a Chest Xray:', is_xray
     
     st.session_state['prev_image']=curr_img_name    
 
 if is_xray:
     with st.spinner("Checking the Image class(Good/Bad/Uncertain)"):
-        if new_image:   
-            all_preds_class, all_preds_bbox = get_voice_vote(input_image)
-            st.session_state['class']=all_preds_class
-            st.session_state['bbox']=all_preds_bbox
-        else:
-            all_preds_class = st.session_state['class']
-            all_preds_bbox = st.session_state['bbox']
-        voice_vote, bbox_nms_pred = multinet_result.get_voice_vote_nms(all_preds_class, all_preds_bbox)
-        st.write(f'Image class:{voice_vote_interpretation[voice_vote].upper()}')
-        img = cv2.imdecode(np.frombuffer(input_image, np.uint8), cv2.IMREAD_COLOR)
-        plt.imsave(os.path.join(result_path[voice_vote], st.session_state['prev_image']), img)
+        try:
+            if new_image:
+                input_image = input_image[:,:,:3]
+                all_preds_class, all_preds_bbox = get_voice_vote(input_image)
+                st.session_state['class']=all_preds_class
+                st.session_state['bbox']=all_preds_bbox
+            else:
+                all_preds_class = st.session_state['class']
+                all_preds_bbox = st.session_state['bbox']
+            voice_vote, bbox_nms_pred = multinet_result.get_voice_vote_nms(all_preds_class, all_preds_bbox)
+            st.write(f'Image class:{voice_vote_interpretation[voice_vote].upper()}')
+            img = input_image
+            plt.imsave(os.path.join(result_path[voice_vote], st.session_state['prev_image']), img)
+        except Exception as e:
+            st.write('error while processing')
+            sys.exit(1)
 else:
     voice_vote = -1
     bbox_nms_pred = ''
 
 if voice_vote_interpretation.get(voice_vote, 'NA').upper()=='GOOD':
     with st.spinner("Checking the cropping quality..."):
-        img_ = cv2.imdecode(np.frombuffer(input_image, np.uint8), cv2.IMREAD_COLOR)
-        img_ = cv2.resize(img_,(256, 256))
-        pil_img = Image.fromarray(img_)
-        h, w = img_.shape[:2]
-    
-        bbox_coord = box_algorithm(bbox_nms_pred, w, h)
-        startX, startY, width, height = bbox_coord().values()
-        cropped_img = img_[startY:startY+height, startX:startX+width]
-        cropped_img = cv2.resize(cropped_img, (256, 256))
+        try:
+            img_ = input_image
+            img_ = cv2.resize(img_,(256, 256))
+            pil_img = Image.fromarray(img_)
+            h, w = img_.shape[:2]
         
-        hull_area_arr, good_crop = unet_segmentation.get_unet_score(cropped_img)
+            bbox_coord = box_algorithm(bbox_nms_pred, w, h)
+            startX, startY, width, height = bbox_coord().values()
+            cropped_img = img_[startY:startY+height, startX:startX+width]
+            cropped_img = cv2.resize(cropped_img, (256, 256))
+            
+            hull_area_arr, good_crop = unet_segmentation.get_unet_score(cropped_img)
+        except Exception as e:
+            st.write('Error in getting unet score')
+            sys.exit(1)            
     
     st.write(f'Image crop quality check:{"PASS" if good_crop else "FAIL"}')
              
