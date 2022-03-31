@@ -42,7 +42,7 @@ if(not os.path.exists(image_path)):
     print('Image folder path does not exist')
     sys.exit()
     
-image_list = os.listdir(image_path)[:300]
+image_list = os.listdir(image_path)
 if(len(image_list)==0):
     print('Folder is empty')
     sys.exit()
